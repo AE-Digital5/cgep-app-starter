@@ -1,6 +1,5 @@
 # Terraform
 .terraform/
-.terraform.lock.hcl
 *.tfstate
 *.tfstate.*
 *.tfvars
@@ -13,5 +12,4 @@ crash.log
 terraform/lambda/handler.zip
 
 # Local
-evidence/
 .DS_Store
