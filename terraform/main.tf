@@ -111,8 +111,12 @@ resource "aws_dynamodb_table" "intake" {
     type = "S"
   }
 
-  # No server_side_encryption block. Defaults to AWS-owned key.
-  # GAP-02: capstone learner expected to add this with a customer-owned key.
+  # GAP-02 closure: customer-managed KMS key for SOC 2 CC6.1 (Encryption at rest).
+  # Reference to aws_kms_key.phi defined in kms.tf.
+  server_side_encryption {
+    enabled     = true
+    kms_key_arn = aws_kms_key.phi.arn
+  }
 }
 
 ######################################################################
