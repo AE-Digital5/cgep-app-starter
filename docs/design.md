@@ -73,6 +73,7 @@ The starter's `GAPS.md` lists 8 named, intentional non-compliance gaps. Each is 
 | Lambda runtime | Python 3.12 (starter default) | Not changing the workload. Capstone is governance, not rewriting the app. |
 | Versioning + Object Lock | Both enabled on uploads bucket AND evidence vault | Versioning enables Object Lock; Object Lock requires versioning. They go together. |
 | KMS key rotation | Enabled (annual, AWS default) | SC-12 requirement; one of the cheapest defenses to add |
+| Cost guardrails | AWS Billing & Cost Management | Account-wide $20/month budget with default email alerts. Expected capstone spend: $10-20 across KMS key, CloudTrail bucket storage, evidence vault storage, and CI runs
 
 ## Repository structure
 cgep-app-starter/
