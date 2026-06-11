@@ -108,6 +108,31 @@ data "aws_iam_policy_document" "phi_key" {
       values   = [data.aws_caller_identity.current.account_id]
     }
   }
+
+  # 5) CloudWatch Logs can use the key for SSE on encrypted log groups.
+  # Needed for the API Gateway access log group (GAP-08). The service
+  # principal is region-scoped per AWS docs.
+  statement {
+    sid    = "AllowCloudWatchLogsEncryptDecrypt"
+    effect = "Allow"
+    principals {
+      type        = "Service"
+      identifiers = ["logs.us-east-1.amazonaws.com"]
+    }
+    actions = [
+      "kms:Encrypt",
+      "kms:Decrypt",
+      "kms:ReEncrypt*",
+      "kms:GenerateDataKey*",
+      "kms:DescribeKey",
+    ]
+    resources = ["*"]
+    condition {
+      test     = "ArnLike"
+      variable = "kms:EncryptionContext:aws:logs:arn"
+      values   = ["arn:aws:logs:us-east-1:${data.aws_caller_identity.current.account_id}:log-group:*"]
+    }
+  }
 }
 
 resource "aws_kms_key" "phi" {

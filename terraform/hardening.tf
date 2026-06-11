@@ -128,3 +128,26 @@ resource "aws_iam_role_policy" "lambda_dlq_write" {
     }]
   })
 }
+
+######################################################################
+# GAP-08: API Gateway access logging + throttling.
+# SOC 2 CC7.2 (System operations / Monitoring + Capacity management).
+#
+# The starter's stage has no access logging and no throttling. The
+# logging closure here creates a CloudWatch log group + modifies the
+# stage in main.tf to write to it. Throttling is set as stage
+# attributes in main.tf (default_route_settings).
+#
+# WAF deferred to future enhancement (documented in design.md).
+######################################################################
+
+resource "aws_cloudwatch_log_group" "api_access" {
+  name              = "/aws/apigateway/${local.name_prefix}-api-${local.suffix}/access"
+  retention_in_days = 30
+  kms_key_id        = aws_kms_key.phi.arn
+
+  # Trust the KMS key to encrypt log group contents. The key's policy
+  # already allows the CloudWatch Logs service via the wildcard service
+  # statements; if cross-account access is ever needed, add a specific
+  # statement to kms.tf.
+}
