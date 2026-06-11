@@ -72,3 +72,25 @@ resource "aws_s3_bucket_policy" "uploads_tls_only" {
   bucket = aws_s3_bucket.uploads.id
   policy = data.aws_iam_policy_document.uploads_tls_only.json
 }
+
+######################################################################
+# GAP-04: Versioning on the S3 uploads bucket.
+# SOC 2 A1.2 (Availability / Recovery capability).
+#
+# Starter resource: aws_s3_bucket.uploads (no versioning, so accidental
+# or malicious overwrites are unrecoverable).
+#
+# Hardening: enable versioning. Combined with the TLS-only policy
+# (GAP-03), SSE-KMS (GAP-01), and tight IAM (GAP-07, pending), the
+# uploads bucket becomes recoverable-by-default for PHI ingestion.
+#
+# Note: this also enables future Object Lock if the team decides PHI
+# uploads themselves should be immutable; Object Lock requires versioning.
+######################################################################
+
+resource "aws_s3_bucket_versioning" "uploads" {
+  bucket = aws_s3_bucket.uploads.id
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
