@@ -94,3 +94,37 @@ resource "aws_s3_bucket_versioning" "uploads" {
     status = "Enabled"
   }
 }
+
+######################################################################
+# GAP-06 supporting resources: Lambda DLQ + IAM permission.
+# SOC 2 CC7.2 (Failure recovery + observability).
+#
+# Lambda hardening attributes (reserved_concurrent_executions,
+# dead_letter_config, tracing_config) are set in main.tf on the Lambda
+# resource itself. Here we add the supporting SQS queue and the IAM
+# permission allowing Lambda to write to it.
+######################################################################
+
+resource "aws_sqs_queue" "lambda_dlq" {
+  name                              = "${local.name_prefix}-lambda-dlq-${local.suffix}"
+  message_retention_seconds         = 1209600 # 14 days (SQS max)
+  kms_master_key_id                 = aws_kms_key.phi.id
+  kms_data_key_reuse_period_seconds = 300
+}
+
+# Grant the Lambda's existing role permission to write to the DLQ.
+# Inline policy here (separate from the starter's lambda_inline policy
+# in main.tf) to keep GAP-06 changes localized in this file.
+resource "aws_iam_role_policy" "lambda_dlq_write" {
+  name = "lambda-dlq-write"
+  role = aws_iam_role.lambda.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["sqs:SendMessage"]
+      Resource = aws_sqs_queue.lambda_dlq.arn
+    }]
+  })
+}

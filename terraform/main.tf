@@ -209,6 +209,31 @@ resource "aws_lambda_function" "intake" {
     }
   }
 
+  # GAP-06 closure: reserved concurrency caps blast radius. SOC 2 CC7.2
+  # (Capacity / System operations). Pre-GAP this was unlimited, meaning
+  # a runaway invocation could exhaust the account-level Lambda budget.
+  # 10 is generous for a single intake API and leaves >900 for other
+  # workloads.
+  reserved_concurrent_executions = 10
+
+  # GAP-06 closure: dead-letter queue captures failed invocations.
+  # SOC 2 CC7.2 (Failure recovery). Without this, after Lambda's
+  # built-in retries (2x for async, 0 for sync) the failed event is
+  # silently dropped. DLQ only catches async invocations; this API is
+  # sync (API Gateway), so DLQ here is defense-in-depth for future async
+  # use (e.g., S3 event trigger).
+  dead_letter_config {
+    target_arn = aws_sqs_queue.lambda_dlq.arn
+  }
+
+  # GAP-06 closure: X-Ray Active tracing. SOC 2 CC7.2 (Observability).
+  # Active traces every invocation; PassThrough only traces when the
+  # X-Ray header is set upstream. For audit completeness on a PHI
+  # workload, Active is the right choice.
+  tracing_config {
+    mode = "Active"
+  }
+
   # GAP-05: no vpc_config block. Learner expected to add one referencing
   # aws_subnet.private[*] and a hardened security group.
 }
