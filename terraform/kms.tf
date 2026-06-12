@@ -133,6 +133,31 @@ data "aws_iam_policy_document" "phi_key" {
       values   = ["arn:aws:logs:us-east-1:${data.aws_caller_identity.current.account_id}:log-group:*"]
     }
   }
+
+  # 6) Lambda service can use the key for encryption context on Lambda environment variables.
+  # Needed for the intake Lambda function's environment variables (GAP-08). The service
+  # principal is region-scoped per AWS docs.
+  statement {
+    sid    = "AllowLambdaEncryptDecrypt"
+    effect = "Allow"
+    principals {
+      type        = "Service"
+      identifiers = ["lambda.amazonaws.com"]
+    }
+    actions = [
+      "kms:Encrypt",
+      "kms:Decrypt",
+      "kms:ReEncrypt*",
+      "kms:GenerateDataKey*",
+      "kms:DescribeKey",
+    ]
+    resources = ["*"]
+    condition {
+      test     = "StringEquals"
+      variable = "aws:SourceAccount"
+      values   = [data.aws_caller_identity.current.account_id]
+    }
+  }
 }
 
 resource "aws_kms_key" "phi" {

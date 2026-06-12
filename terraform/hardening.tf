@@ -191,14 +191,20 @@ resource "aws_security_group" "lambda" {
   }
 }
 
-# Gateway endpoint for S3. Free. Auto-associates with the VPC's main
-# route table; private subnets use the main route table (they have no
-# explicit association), so traffic to S3 from the Lambda subnets
-# automatically routes through this endpoint.
+# Lambda. Gateway endpoint for S3. Free. Explicit route_table_ids
+# association on the VPC's main route table; private subnets use the
+# main route table (they have no explicit association), so traffic
+# to S3 from the Lambda subnets routes through this endpoint.
+#
+# Original assumption "auto-associates with main RT" was incorrect:
+# without explicit route_table_ids, gateway endpoints create no
+# routes anywhere. Lambda hung waiting for DDB/S3 reachability.
+# Surfaced during Day 6 first apply. Worth a paragraph in WRITEUP.
 resource "aws_vpc_endpoint" "s3" {
   vpc_id            = aws_vpc.main.id
   service_name      = "com.amazonaws.${data.aws_region.current.name}.s3"
   vpc_endpoint_type = "Gateway"
+  route_table_ids   = [aws_vpc.main.main_route_table_id]
 
   # Endpoint policy: restrict use to this account's resources. Without
   # this, the endpoint would allow access to S3 buckets in OTHER AWS
@@ -229,6 +235,7 @@ resource "aws_vpc_endpoint" "dynamodb" {
   vpc_id            = aws_vpc.main.id
   service_name      = "com.amazonaws.${data.aws_region.current.name}.dynamodb"
   vpc_endpoint_type = "Gateway"
+  route_table_ids   = [aws_vpc.main.main_route_table_id]
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -249,6 +256,21 @@ resource "aws_vpc_endpoint" "dynamodb" {
   tags = {
     Name = "${local.name_prefix}-ddb-endpoint-${local.suffix}"
   }
+}
+
+# Lambda's existing role only has AWSLambdaBasicExecutionRole (logs).
+# Putting the Lambda in a VPC requires it to create/manage ENIs in
+# the subnets, which needs the AWSLambdaVPCAccessExecutionRole
+# managed policy. Without this, Lambda creation fails with
+# "InvalidParameterValueException: The provided execution role does
+# not have permissions to call CreateNetworkInterface on EC2."
+#
+# This is a starter-role permission addition, not a starter modification.
+# We use a separate role-policy-attachment so the starter's main.tf
+# stays untouched on this dimension.
+resource "aws_iam_role_policy_attachment" "lambda_vpc_access" {
+  role       = aws_iam_role.lambda.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole"
 }
 
 # Look up the current region for use in the endpoint service names.

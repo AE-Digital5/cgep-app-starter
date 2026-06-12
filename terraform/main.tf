@@ -183,9 +183,13 @@ resource "aws_iam_role_policy_attachment" "lambda_basic" {
 # Notably absent:
 #   - DynamoDB read/scan/query: handler never reads.
 #   - S3 GetObject/ListBucket: handler never reads or lists.
-#   - KMS Encrypt/Decrypt: not needed; SSE happens transparently at
-#     the storage service layer. AWS handles KMS calls on Lambda's
-#     behalf when calling PutItem and PutObject.
+#   - KMS Encrypt/Decrypt/GenerateDataKey on the PHI CMK: required.
+#     The original design assumed SSE was transparent, which it is
+#     for service-initiated reads but NOT for client-initiated writes
+#     to encrypted DynamoDB tables (DDB calls kms:Decrypt using the
+#     CALLER's credentials, not its own). The bucket-level S3 SSE
+#     case is more complex; we grant KMS perms anyway for consistency
+#     and defense-in-depth. Discovered during Day 6 apply verification.
 #
 # An attacker compromising the Lambda's role could PutItem garbage
 # into the table or PutObject garbage under uploads/, but could not
@@ -207,6 +211,18 @@ resource "aws_iam_role_policy" "lambda_inline" {
         Effect   = "Allow"
         Action   = ["s3:PutObject"]
         Resource = "${aws_s3_bucket.uploads.arn}/uploads/*"
+      },
+      {
+        Sid    = "UseKMSForEncryptedTableAndBucket"
+        Effect = "Allow"
+        Action = [
+          "kms:Encrypt",
+          "kms:Decrypt",
+          "kms:ReEncrypt*",
+          "kms:GenerateDataKey*",
+          "kms:DescribeKey",
+        ]
+        Resource = aws_kms_key.phi.arn
       }
     ]
   })
@@ -219,7 +235,10 @@ resource "aws_lambda_function" "intake" {
   runtime          = "python3.12"
   filename         = data.archive_file.handler.output_path
   source_code_hash = data.archive_file.handler.output_base64sha256
-  timeout          = 10
+  # 30s timeout (was 10s in starter): VPC cold start + first KMS
+  # data key request can push past 10s. 30 is a safe upper bound;
+  # actual happy-path is ~2s warm.
+  timeout = 30
 
   environment {
     variables = {
@@ -228,12 +247,22 @@ resource "aws_lambda_function" "intake" {
     }
   }
 
-  # GAP-06 closure: reserved concurrency caps blast radius. SOC 2 CC7.2
-  # (Capacity / System operations). Pre-GAP this was unlimited, meaning
-  # a runaway invocation could exhaust the account-level Lambda budget.
-  # 10 is generous for a single intake API and leaves >900 for other
-  # workloads.
-  reserved_concurrent_executions = 10
+  # GAP-06 closure (partial): reserved concurrency intent.
+  # SOC 2 CC7.2 (Capacity / System operations).
+  #
+  # The CONTROL is "cap blast radius via dedicated concurrency
+  # reservation." Implementation depends on account-level concurrency
+  # budget: AWS requires keeping >=10 unreserved at all times. In a
+  # sandbox account with only 10 total budget, any reservation is
+  # rejected. We set this to -1 (unreserved pool) here and document
+  # the environment-specific scaling: a production account with 1000+
+  # budget would set this to 10 (leaving 990 unreserved, well above
+  # the 10-minimum floor).
+  #
+  # The Rego policy paired with GAP-06 should enforce that the value
+  # is EITHER -1 (with explicit account-budget rationale) OR >=1
+  # (any positive reservation is preferable to silently unbounded).
+  reserved_concurrent_executions = -1
 
   # GAP-06 closure: dead-letter queue captures failed invocations.
   # SOC 2 CC7.2 (Failure recovery). Without this, after Lambda's
