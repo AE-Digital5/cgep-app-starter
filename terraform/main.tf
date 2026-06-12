@@ -234,8 +234,14 @@ resource "aws_lambda_function" "intake" {
     mode = "Active"
   }
 
-  # GAP-05: no vpc_config block. Learner expected to add one referencing
-  # aws_subnet.private[*] and a hardened security group.
+  # GAP-05 closure: Lambda in VPC. SOC 2 CC6.6 (Network segmentation).
+  # References starter's private subnets and the hardened SG in
+  # hardening.tf. Egress to S3 + DynamoDB via free gateway endpoints
+  # (also in hardening.tf); no NAT, no internet.
+  vpc_config {
+    subnet_ids         = aws_subnet.private[*].id
+    security_group_ids = [aws_security_group.lambda.id]
+  }
 }
 
 ######################################################################
@@ -246,6 +252,7 @@ resource "aws_lambda_function" "intake" {
 resource "aws_apigatewayv2_api" "intake" {
   name          = "${local.name_prefix}-api-${local.suffix}"
   protocol_type = "HTTP"
+  description   = "HTTP API for intake service"
 }
 
 resource "aws_apigatewayv2_integration" "lambda" {
