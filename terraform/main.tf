@@ -171,23 +171,42 @@ resource "aws_iam_role_policy_attachment" "lambda_basic" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 }
 
-# GAP-07: deliberately broad permissions on the workload data stores.
+# GAP-07 closure: IAM least-privilege on the workload data stores.
+# SOC 2 CC6.3 (Privileged access / Least privilege).
+#
+# Reduced from dynamodb:* and s3:* to exactly the actions the handler
+# performs:
+#   - dynamodb:PutItem on the intake table (one write per submission)
+#   - s3:PutObject on the uploads bucket, scoped to uploads/ prefix
+#     (one write per submission that has an attached file)
+#
+# Notably absent:
+#   - DynamoDB read/scan/query: handler never reads.
+#   - S3 GetObject/ListBucket: handler never reads or lists.
+#   - KMS Encrypt/Decrypt: not needed; SSE happens transparently at
+#     the storage service layer. AWS handles KMS calls on Lambda's
+#     behalf when calling PutItem and PutObject.
+#
+# An attacker compromising the Lambda's role could PutItem garbage
+# into the table or PutObject garbage under uploads/, but could not
+# exfiltrate existing data or modify other AWS resources.
 resource "aws_iam_role_policy" "lambda_inline" {
   name = "intake-data-access"
   role = aws_iam_role.lambda.id
-
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
       {
+        Sid      = "WriteSubmissionToTable"
         Effect   = "Allow"
-        Action   = "dynamodb:*"
+        Action   = ["dynamodb:PutItem"]
         Resource = aws_dynamodb_table.intake.arn
       },
       {
+        Sid      = "WriteAttachmentToBucket"
         Effect   = "Allow"
-        Action   = "s3:*"
-        Resource = ["${aws_s3_bucket.uploads.arn}", "${aws_s3_bucket.uploads.arn}/*"]
+        Action   = ["s3:PutObject"]
+        Resource = "${aws_s3_bucket.uploads.arn}/uploads/*"
       }
     ]
   })
