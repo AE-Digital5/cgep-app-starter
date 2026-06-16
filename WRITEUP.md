@@ -41,6 +41,14 @@ Framework: SOC 2 Type II (Trust Services Criteria).
 
 [fill in — Day 6 lesson about which calls KMS happens on whose credentials]
 
+### Three deny rules per policy, not one
+
+[fill in — Day 7 lesson: better CI output, fewer ambiguous failures. Each Rego policy emits 2-3 separate denies (missing config, wrong value, missing CMK) rather than a single catch-all. Trade-off: more lines of policy, but the CI report tells you exactly what's wrong, not just that something is.]
+
+### Cross-policy fixture validity in shared Rego packages
+
+[fill in — Day 7 lesson: when N policies share `package main`, each passing fixture must satisfy ALL N policies. Discovered when GAP-03 was added and GAP-01/03 cross-failed. Patched fixtures to be globally valid. At 10+ policies this would warrant a shared fixture base pattern.]
+
 ## What Day 6's first apply taught me
 
 Four hardening surprises surfaced in the first integrated apply. Each was 5 minutes to fix in code, but none would have been caught by terraform validate or static review:
