@@ -35,6 +35,28 @@ passing_plan := {
 				},
 			},
 		},
+		# Satisfies GAP-03 (TLS-only) so the fixture is clean across all
+		# policies, not just GAP-01.
+		{
+			"address": "aws_s3_bucket_policy.uploads",
+			"type": "aws_s3_bucket_policy",
+			"change": {
+				"actions": ["create"],
+				"after": {
+					"bucket": "aws_s3_bucket.uploads",
+					"policy": json.marshal({
+						"Version": "2012-10-17",
+						"Statement": [{
+							"Effect": "Deny",
+							"Principal": "*",
+							"Action": "s3:*",
+							"Resource": "arn:aws:s3:::uploads-12345/*",
+							"Condition": {"Bool": {"aws:SecureTransport": "false"}},
+						}],
+					}),
+				},
+			},
+		},
 	],
 }
 
