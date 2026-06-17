@@ -1,31 +1,23 @@
 # GAP-02 — DynamoDB tables must use customer-managed KMS encryption.
 #
-# SOC 2 CC6.1 (Encryption at rest).
-# NIST 800-53 control reference: SC-28 (Protection of Information at Rest).
+# SOC 2 CC6.1. NIST 800-53 SC-28.
 #
-# The starter ships its DynamoDB table with default encryption, which
-# uses an AWS-owned key (not even an AWS-managed key — invisible in
-# KMS, with no audit, rotation, or revocation capability).
-#
-# This policy enforces that every aws_dynamodb_table resource has:
-#   - server_side_encryption.enabled = true
-#   - server_side_encryption.kms_key_arn pointing at a customer-managed CMK
-#
-# A table with no server_side_encryption block at all fails: the
-# default is "use AWS-owned key" which doesn't meet CC6.1 for PHI.
-#
-# Tested via: policies/tests/sc28_ddb_cmk_test.rego
+# Handling plan-time unresolved references: same pattern as GAP-01.
+# The kms_key_arn is often a reference to aws_kms_key.phi.arn, which
+# is unknown at plan time. We accept that as valid intent.
 
 package main
 
 import rego.v1
 
-# DENY: any DynamoDB table without a server_side_encryption block.
+# DENY: any DynamoDB table with no server_side_encryption block AND
+# no unknown-at-plan-time SSE configuration. The "no SSE block at all"
+# state means defaults to AWS-owned key.
 deny contains msg if {
 	some rc in input.resource_changes
 	rc.type == "aws_dynamodb_table"
 	rc.change.actions[_] != "delete"
-	not rc.change.after.server_side_encryption
+	not _has_sse(rc.change)
 
 	msg := sprintf(
 		"GAP-02 (SOC 2 CC6.1 / SC-28): DynamoDB table %v has no server_side_encryption block; defaults to AWS-owned key. Add server_side_encryption { enabled = true, kms_key_arn = aws_kms_key.phi.arn }.",
@@ -33,7 +25,7 @@ deny contains msg if {
 	)
 }
 
-# DENY: any DynamoDB table where server_side_encryption is explicitly disabled.
+# DENY: SSE explicitly disabled.
 deny contains msg if {
 	some rc in input.resource_changes
 	rc.type == "aws_dynamodb_table"
@@ -43,12 +35,12 @@ deny contains msg if {
 	sse.enabled == false
 
 	msg := sprintf(
-		"GAP-02 (SOC 2 CC6.1 / SC-28): DynamoDB table %v has server_side_encryption.enabled = false. PHI workloads require server-side encryption with a customer-managed key.",
+		"GAP-02 (SOC 2 CC6.1 / SC-28): DynamoDB table %v has server_side_encryption.enabled = false.",
 		[rc.address],
 	)
 }
 
-# DENY: any DynamoDB table that's encrypted but uses AWS-owned key (no kms_key_arn).
+# DENY: SSE enabled but no kms_key_arn (neither known nor unknown-at-plan-time).
 deny contains msg if {
 	some rc in input.resource_changes
 	rc.type == "aws_dynamodb_table"
@@ -56,10 +48,31 @@ deny contains msg if {
 
 	sse := rc.change.after.server_side_encryption[_]
 	sse.enabled == true
-	not sse.kms_key_arn
+	not _has_kms_key_arn(rc.change)
 
 	msg := sprintf(
-		"GAP-02 (SOC 2 CC6.1 / SC-28): DynamoDB table %v has server-side encryption enabled but no kms_key_arn set; this uses the AWS-owned key. Specify kms_key_arn pointing at a customer-managed CMK.",
+		"GAP-02 (SOC 2 CC6.1 / SC-28): DynamoDB table %v has SSE enabled but no kms_key_arn set (or coming via reference). Use kms_key_arn = aws_kms_key.phi.arn.",
 		[rc.address],
 	)
+}
+
+# Helpers
+_has_sse(change) if {
+	change.after.server_side_encryption
+	count(change.after.server_side_encryption) > 0
+}
+
+_has_sse(change) if {
+	change.after_unknown.server_side_encryption == true
+}
+
+_has_kms_key_arn(change) if {
+	sse := change.after.server_side_encryption[_]
+	sse.kms_key_arn
+	sse.kms_key_arn != ""
+}
+
+_has_kms_key_arn(change) if {
+	some unknown_sse in change.after_unknown.server_side_encryption
+	unknown_sse.kms_key_arn == true
 }

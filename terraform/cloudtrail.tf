@@ -108,6 +108,25 @@ data "aws_iam_policy_document" "cloudtrail_bucket" {
       values   = ["arn:aws:cloudtrail:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:trail/${local.name_prefix}-trail-${local.suffix}"]
     }
   }
+  
+  statement {
+    sid    = "DenyUnencryptedTransport"
+    effect = "Deny"
+    principals {
+      type        = "*"
+      identifiers = ["*"]
+    }
+    actions = ["s3:*"]
+    resources = [
+      aws_s3_bucket.cloudtrail.arn,
+      "${aws_s3_bucket.cloudtrail.arn}/*",
+    ]
+    condition {
+      test     = "Bool"
+      variable = "aws:SecureTransport"
+      values   = ["false"]
+    }
+  }
 }
 
 resource "aws_s3_bucket_policy" "cloudtrail" {
