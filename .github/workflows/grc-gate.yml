@@ -1,9 +1,17 @@
 name: GRC Gate
 
-# Triggers:
-#   - PRs that touch infrastructure or policy code: run plan + policy gate
-#   - Pushes to main (i.e., post-merge): same plan + policy gate, plus apply
-#     and sign-and-upload (added in Day 9)
+# The capstone's chain of custody from PR to immutable evidence.
+#
+# Flow:
+#   PR opened/updated:
+#     plan -> policy-gate
+#       PR shows green check when policies pass, red check + annotations when they don't.
+#   Push to main (post-merge):
+#     plan -> policy-gate -> apply -> sign-and-upload
+#       Bundle: plan.json + policy-results.json + apply.log + manifest.json
+#       Bundle digest is Cosign-signed (keyless via GitHub OIDC + Sigstore).
+#       Bundle + signature + .sha256 uploaded to GOVERNANCE-locked S3 vault.
+
 on:
   pull_request:
     paths:
@@ -17,36 +25,33 @@ on:
     paths:
       - 'terraform/**'
       - 'policies/**'
+      - '.github/workflows/grc-gate.yml'
 
-# OIDC trust requires id-token: write. contents: read for checkout.
 permissions:
-  id-token: write
+  id-token: write           # OIDC to AWS + Sigstore
   contents: read
-  pull-requests: write   # to comment on PRs with policy results
+  pull-requests: write      # PR comments with policy results
 
 env:
   AWS_REGION: us-east-1
-  TF_IN_AUTOMATION: 'true'   # quieter Terraform output for CI
+  TF_IN_AUTOMATION: 'true'
+  COSIGN_VERSION: 'v2.4.0'
 
 jobs:
   plan:
     name: Terraform plan
     runs-on: ubuntu-latest
-    outputs:
-      plan_json_path: terraform/plan.json
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Configure AWS credentials via OIDC
+      - name: Configure AWS via OIDC
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
-          role-session-name: github-actions-cgep-capstone-${{ github.run_id }}
+          role-session-name: cgep-capstone-plan-${{ github.run_id }}
 
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
+      - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: 1.6.6
           terraform_wrapper: false
@@ -61,8 +66,7 @@ jobs:
           terraform plan -out=tfplan -input=false -no-color
           terraform show -json tfplan > plan.json
 
-      - name: Upload plan artifacts
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: terraform-plan
           path: |
@@ -75,11 +79,9 @@ jobs:
     runs-on: ubuntu-latest
     needs: plan
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Download plan artifacts
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
           name: terraform-plan
           path: terraform/
@@ -99,12 +101,163 @@ jobs:
           sudo mv /tmp/conftest /usr/local/bin/conftest
           conftest --version
 
-      - name: Run policy tests (sanity check policies themselves)
+      - name: Policy self-test
         run: opa test policies/ -v
 
-      - name: Run policies against Terraform plan
+      - name: Conftest against plan (human-readable)
         run: |
           conftest test terraform/plan.json \
             --policy policies/ \
             --namespace main \
             --output github
+
+      - name: Conftest against plan (JSON for bundle)
+        if: always()
+        run: |
+          conftest test terraform/plan.json \
+            --policy policies/ \
+            --namespace main \
+            --output json > policy-results.json || true
+          # The "|| true" is intentional: we want the JSON even when policies deny,
+          # so the evidence bundle can capture the failure detail.
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: policy-results
+          path: policy-results.json
+          retention-days: 7
+
+  apply:
+    name: Terraform apply
+    runs-on: ubuntu-latest
+    needs: policy-gate
+    # Only run apply on push to main, never on PRs.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: terraform-plan
+          path: terraform/
+
+      - name: Configure AWS via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: cgep-capstone-apply-${{ github.run_id }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.6.6
+          terraform_wrapper: false
+
+      - name: Terraform init
+        working-directory: terraform
+        run: terraform init -input=false
+
+      - name: Terraform apply
+        working-directory: terraform
+        run: |
+          terraform apply -input=false -no-color tfplan 2>&1 | tee apply.log
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: apply-log
+          path: terraform/apply.log
+          retention-days: 7
+
+  sign-and-upload:
+    name: Sign evidence + upload to vault
+    runs-on: ubuntu-latest
+    needs: apply
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: terraform-plan
+          path: artifacts/
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: policy-results
+          path: artifacts/
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: apply-log
+          path: artifacts/
+
+      - name: Configure AWS via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: cgep-capstone-evidence-${{ github.run_id }}
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3
+        with:
+          cosign-release: ${{ env.COSIGN_VERSION }}
+
+      - name: Build manifest
+        run: |
+          cat > artifacts/manifest.json <<EOF
+          {
+            "schema_version": "1.0",
+            "capstone": "cgep-app-starter",
+            "commit_sha": "${{ github.sha }}",
+            "run_id": "${{ github.run_id }}",
+            "run_number": ${{ github.run_number }},
+            "actor": "${{ github.actor }}",
+            "ref": "${{ github.ref }}",
+            "event": "${{ github.event_name }}",
+            "ci_role_arn": "${{ vars.AWS_ROLE_ARN }}",
+            "started_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "workflow": "${{ github.workflow }}",
+            "repository": "${{ github.repository }}"
+          }
+          EOF
+          cat artifacts/manifest.json
+
+      - name: Build bundle
+        id: bundle
+        run: |
+          BUNDLE_NAME="evidence-${{ github.run_number }}-$(date -u +%Y%m%dT%H%M%SZ)-${GITHUB_SHA::8}.tar.gz"
+          echo "BUNDLE_NAME=${BUNDLE_NAME}" >> "$GITHUB_ENV"
+          echo "bundle_name=${BUNDLE_NAME}" >> "$GITHUB_OUTPUT"
+          cd artifacts
+          tar czf "../${BUNDLE_NAME}" \
+            plan.json \
+            policy-results.json \
+            apply.log \
+            manifest.json
+          cd ..
+          ls -la "${BUNDLE_NAME}"
+          sha256sum "${BUNDLE_NAME}" | tee "${BUNDLE_NAME}.sha256"
+
+      - name: Cosign keyless sign
+        run: |
+          cosign sign-blob \
+            --yes \
+            --bundle "${BUNDLE_NAME}.sig.bundle" \
+            "${BUNDLE_NAME}"
+          ls -la "${BUNDLE_NAME}"*
+
+      - name: Resolve vault name from Terraform output
+        id: vault
+        working-directory: terraform
+        run: |
+          terraform init -input=false -no-color
+          VAULT=$(terraform output -raw vault_name)
+          echo "vault=${VAULT}" >> "$GITHUB_OUTPUT"
+          echo "Vault: ${VAULT}"
+
+      - name: Upload bundle to vault
+        env:
+          VAULT: ${{ steps.vault.outputs.vault }}
+        run: |
