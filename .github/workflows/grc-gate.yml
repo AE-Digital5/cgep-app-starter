@@ -134,6 +134,8 @@ jobs:
     needs: policy-gate
     # Only run apply on push to main, never on PRs.
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    outputs:
+      vault_name: ${{ steps.outputs.outputs.vault_name }}
     steps:
       - uses: actions/checkout@v4
 
@@ -162,6 +164,14 @@ jobs:
         working-directory: terraform
         run: |
           terraform apply -input=false -no-color tfplan 2>&1 | tee apply.log
+
+      - name: Expose Terraform outputs to downstream jobs
+        id: outputs
+        working-directory: terraform
+        run: |
+          VAULT_NAME=$(terraform output -raw vault_name)
+          echo "vault_name=${VAULT_NAME}" >> "$GITHUB_OUTPUT"
+          echo "Vault: ${VAULT_NAME}"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -248,16 +258,17 @@ jobs:
             "${BUNDLE_NAME}"
           ls -la "${BUNDLE_NAME}"*
 
-      - name: Resolve vault name from Terraform output
-        id: vault
-        working-directory: terraform
-        run: |
-          terraform init -input=false -no-color
-          VAULT=$(terraform output -raw vault_name)
-          echo "vault=${VAULT}" >> "$GITHUB_OUTPUT"
-          echo "Vault: ${VAULT}"
-
       - name: Upload bundle to vault
         env:
-          VAULT: ${{ steps.vault.outputs.vault }}
+          VAULT: ${{ needs.apply.outputs.vault_name }}
         run: |
+          OBJECT_LOCK_DATE=$(date -u -d "+1 day" +%Y-%m-%dT%H:%M:%SZ)
+          for FILE in "${BUNDLE_NAME}" "${BUNDLE_NAME}.sha256" "${BUNDLE_NAME}.sig.bundle"; do
+            aws s3api put-object \
+              --bucket "${VAULT}" \
+              --key "evidence/${FILE}" \
+              --body "${FILE}" \
+              --object-lock-mode GOVERNANCE \
+              --object-lock-retain-until-date "${OBJECT_LOCK_DATE}"
+            echo "Uploaded ${FILE} to s3://${VAULT}/evidence/${FILE}"
+          done
