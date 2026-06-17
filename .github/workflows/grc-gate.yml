@@ -1,0 +1,110 @@
+name: GRC Gate
+
+# Triggers:
+#   - PRs that touch infrastructure or policy code: run plan + policy gate
+#   - Pushes to main (i.e., post-merge): same plan + policy gate, plus apply
+#     and sign-and-upload (added in Day 9)
+on:
+  pull_request:
+    paths:
+      - 'terraform/**'
+      - 'policies/**'
+      - 'oidc/**'
+      - '.github/workflows/grc-gate.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'terraform/**'
+      - 'policies/**'
+
+# OIDC trust requires id-token: write. contents: read for checkout.
+permissions:
+  id-token: write
+  contents: read
+  pull-requests: write   # to comment on PRs with policy results
+
+env:
+  AWS_REGION: us-east-1
+  TF_IN_AUTOMATION: 'true'   # quieter Terraform output for CI
+
+jobs:
+  plan:
+    name: Terraform plan
+    runs-on: ubuntu-latest
+    outputs:
+      plan_json_path: terraform/plan.json
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: github-actions-cgep-capstone-${{ github.run_id }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.6.6
+          terraform_wrapper: false
+
+      - name: Terraform init
+        working-directory: terraform
+        run: terraform init -input=false
+
+      - name: Terraform plan
+        working-directory: terraform
+        run: |
+          terraform plan -out=tfplan -input=false -no-color
+          terraform show -json tfplan > plan.json
+
+      - name: Upload plan artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-plan
+          path: |
+            terraform/tfplan
+            terraform/plan.json
+          retention-days: 7
+
+  policy-gate:
+    name: Rego policy gate
+    runs-on: ubuntu-latest
+    needs: plan
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download plan artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: terraform-plan
+          path: terraform/
+
+      - name: Install OPA
+        run: |
+          curl -sL -o /usr/local/bin/opa \
+            https://openpolicyagent.org/downloads/v1.16.2/opa_linux_amd64_static
+          chmod +x /usr/local/bin/opa
+          opa version
+
+      - name: Install Conftest
+        run: |
+          curl -sL -o /tmp/conftest.tar.gz \
+            https://github.com/open-policy-agent/conftest/releases/download/v0.50.0/conftest_0.50.0_Linux_x86_64.tar.gz
+          tar -xzf /tmp/conftest.tar.gz -C /tmp/ conftest
+          sudo mv /tmp/conftest /usr/local/bin/conftest
+          conftest --version
+
+      - name: Run policy tests (sanity check policies themselves)
+        run: opa test policies/ -v
+
+      - name: Run policies against Terraform plan
+        run: |
+          conftest test terraform/plan.json \
+            --policy policies/ \
+            --namespace main \
+            --output github
