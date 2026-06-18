@@ -12,4 +12,14 @@ crash.log
 terraform/lambda/handler.zip
 
 # Local
-.DS_Store.trestle/
+.DS_Store
+.trestle/
+
+# Trestle scaffolding not used by this capstone
+assessment-plans/
+assessment-results/
+catalogs/
+dist/
+mapping-collections/
+plan-of-action-and-milestones/
+system-security-plans/
