@@ -60,6 +60,42 @@ Four hardening surprises surfaced in the first integrated apply. Each was 5 minu
 
 Each is the kind of thing that distinguishes "I followed a tutorial" from "I deployed real infrastructure."
 
+## What Day 9's first pipeline run taught me
+
+The Rego policies and pipeline survived first contact with real infrastructure. Four issues surfaced, each in a different category, each fixed:
+
+**1. Plan-time unresolved references break naive Rego policies.**
+
+Terraform records cross-resource references (like `kms_master_key_id = aws_kms_key.phi.arn`) as `change.after_unknown` rather than `change.after` until apply resolves them. Our policies originally checked only `change.after`, so they incorrectly fired "no CMK specified" on every encrypted resource. Fixed by also accepting `change.after_unknown[<field>] == true` as valid intent. Real lesson: Rego policies for Terraform must understand the plan JSON's known/unknown distinction.
+
+**2. Test fixtures lie about real plan shape.**
+
+Our 21 unit tests passed because the fixtures used resolved references throughout. The policies passed against the fixtures and failed against real plans. Lesson: fixture testing is necessary but not sufficient. The first end-to-end run against a real plan is the actual validation.
+
+**3. Missing remote state caused duplicate parallel stacks.**
+
+Each pipeline run started with no Terraform state on the GitHub runner (default local state). Two runs in succession produced two distinct random_id suffixes, hence two parallel deployments of every resource. AWS charged for both until manually cleaned up. The signed evidence bundle landed in only one of the two vaults. Lesson: production pipelines need a remote state backend (S3 + DynamoDB lock table) before apply runs in CI. Documented as future work; not implemented for this submission to keep scope finite.
+
+**4. Sign-and-upload job needed Terraform output passed as a job dependency.**
+
+The sign-and-upload job started on a fresh GitHub runner with no Terraform binary and no state to read `terraform output -raw vault_name`. Refactored to pass the vault name from the apply job as a GitHub Actions job output via `outputs` and `needs.apply.outputs.vault_name`. Lesson: GitHub Actions jobs are independent runners; cross-job data passes through `outputs`, not through filesystem state.
+
+## Submission verification (the chain of custody, end-to-end)
+
+The signed bundle at `s3://cgep-capstone-evidence-vault-65cc2469/evidence/evidence-3-20260617T234013Z-6d98ee09.tar.gz` is the auditor's artifact. To reproduce:
+
+    aws s3 cp s3://cgep-capstone-evidence-vault-65cc2469/evidence/evidence-3-20260617T234013Z-6d98ee09.tar.gz .
+    aws s3 cp s3://cgep-capstone-evidence-vault-65cc2469/evidence/evidence-3-20260617T234013Z-6d98ee09.tar.gz.sha256 .
+    aws s3 cp s3://cgep-capstone-evidence-vault-65cc2469/evidence/evidence-3-20260617T234013Z-6d98ee09.tar.gz.sig.bundle .
+    sha256sum -c evidence-3-20260617T234013Z-6d98ee09.tar.gz.sha256
+    cosign verify-blob \
+      --bundle evidence-3-20260617T234013Z-6d98ee09.tar.gz.sig.bundle \
+      --certificate-identity "https://github.com/AE-Digital5/cgep-app-starter/.github/workflows/grc-gate.yml@refs/heads/main" \
+      --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+      evidence-3-20260617T234013Z-6d98ee09.tar.gz
+
+Both commands return success when run today. The bundle contents (plan.json, policy-results.json showing 12 passes, apply.log, manifest.json) bind the deployment to commit `6d98ee0954934a518ff3493d79f8648c64363146` via the signed manifest. A reviewer can independently verify the Rekor transparency log entry to confirm the signature existed at the recorded timestamp, no AWS account access required.
+
 ## What I would do differently in production
 
 [fill in]
