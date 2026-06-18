@@ -58,6 +58,26 @@
                     "rel": "evidence",
                     "href": "s3://cgep-capstone-evidence-vault-65cc2469/evidence/evidence-3-20260617T234013Z-6d98ee09.tar.gz",
                     "text": "Signed pipeline bundle (run #3, commit 6d98ee0). Verify with cosign verify-blob."
+                  },
+                  {
+                    "rel": "reference",
+                    "href": "#aaaaaaaa-1111-4222-8333-444444444444",
+                    "text": "Capstone repository"
+                  },
+                  {
+                    "rel": "reference",
+                    "href": "#bbbbbbbb-1111-4222-8333-444444444444",
+                    "text": "GAPS.md — the 8 named gaps"
+                  },
+                  {
+                    "rel": "reference",
+                    "href": "#cccccccc-1111-4222-8333-444444444444",
+                    "text": "Design document"
+                  },
+                  {
+                    "rel": "reference",
+                    "href": "#dddddddd-1111-4222-8333-444444444444",
+                    "text": "WRITEUP — engineering reflection"
                   }
                 ]
               },
