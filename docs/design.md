@@ -94,9 +94,10 @@ cgep-app-starter/
 │   ├── cc63_iam_least_priv.rego
 │   └── tests/
 │       └── *_test.rego
-├── oscal/                      (NEW)
-│   ├── component-definitions/compliant-intake-api/component-definition.json
-│   └── profiles/soc2-cc-minimum/profile.json
+├── component-definitions/      (NEW, trestle-native layout)
+│   └── compliant-intake-api/component-definition.json
+├── profiles/                   (NEW, trestle-native layout)
+│   └── soc2-cc-minimum/profile.json
 ├── scripts/                    (NEW)
 │   ├── capture-evidence.sh     (ported from Lab 2.5)
 │   ├── verify-evidence.sh      (ported from Lab 4.4)

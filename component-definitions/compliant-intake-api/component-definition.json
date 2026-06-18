@@ -1,0 +1,241 @@
+{
+  "component-definition": {
+    "uuid": "9a3c5f12-1e2b-4d8a-9f6c-0c4d8e7a1b3f",
+    "metadata": {
+      "title": "Acme Health Patient Intake API — Compliant Component",
+      "last-modified": "2026-06-18T20:00:00.000000+00:00",
+      "version": "1.0.0",
+      "oscal-version": "1.2.1",
+      "parties": [
+        {
+          "uuid": "f4681b08-8a50-4b6a-af63-8bf551fa39de",
+          "type": "organization",
+          "name": "AE-Digital5 / CGE-P Capstone"
+        }
+      ]
+    },
+    "components": [
+      {
+        "uuid": "b1d8f7a2-3c4e-49ad-8b1c-2f5e7c8a9d0b",
+        "type": "service",
+        "title": "compliant-intake-api",
+        "description": "Hardened Patient Intake API for Acme Health. Workload is Lambda + DynamoDB + S3 + API Gateway in a VPC, fronted by GitHub Actions CI with Conftest policy gate, Cosign-signed evidence bundles, and Object Lock vault. Closes all 8 gaps from the cgep-app-starter GAPS.md keyed to SOC 2 Trust Services Criteria; 5 of 8 also enforced detectively via Rego policy in CI.",
+        "purpose": "Demonstrate end-to-end GRC engineering for a PHI workload: preventative controls in Terraform, detective controls in Rego, chain-of-custody in CI, machine-readable assurance in OSCAL.",
+        "responsible-roles": [
+          {
+            "role-id": "provider",
+            "party-uuids": ["f4681b08-8a50-4b6a-af63-8bf551fa39de"]
+          }
+        ],
+        "props": [
+          { "name": "framework", "value": "SOC 2 Trust Services Criteria" },
+          { "name": "evidence-vault", "value": "cgep-capstone-evidence-vault-65cc2469" },
+          { "name": "ci-role-arn", "value": "arn:aws:iam::096563427771:role/cgep-capstone-gate" }
+        ],
+        "control-implementations": [
+          {
+            "uuid": "7d9e4c2a-5b3f-4a1c-8e0d-1b2c3d4e5f6a",
+            "source": "https://raw.githubusercontent.com/usnistgov/oscal-content/main/nist.gov/SP800-53/rev5/json/NIST_SP-800-53_rev5_catalog.json",
+            "description": "Implementation of NIST 800-53 Rev 5 controls satisfied by the hardened Patient Intake API. Each implemented-requirement also carries a soc2-cc prop mapping to the AICPA Trust Services Criterion. Evidence URIs reference the signed pipeline bundle in the GOVERNANCE-locked evidence vault.",
+            "implemented-requirements": [
+              {
+                "uuid": "11111111-aaaa-4bbb-8ccc-111111111111",
+                "control-id": "sc-28",
+                "description": "GAP-01 + GAP-02 closure. S3 uploads bucket and DynamoDB intake table are both encrypted at rest using a customer-managed KMS CMK (alias/acme-health-phi). Key rotation enabled annually. Key policy separates administrative permissions (CI role) from operational use (S3/DynamoDB service principals with confused-deputy guards via aws:SourceAccount). Detective enforcement via two Rego policies: sc28_s3_cmk.rego and sc28_ddb_cmk.rego. Surfaced as a real engineering lesson during Day 9 apply: DynamoDB calls kms:Decrypt as the caller (Lambda role), not as the service, so the Lambda role required explicit KMS permissions in both the role's inline policy and the CMK's key policy.",
+                "props": [
+                  { "name": "implementation-status", "value": "implemented" },
+                  { "name": "soc2-cc", "value": "CC6.1" },
+                  { "name": "gap-id", "value": "GAP-01" },
+                  { "name": "gap-id", "value": "GAP-02" },
+                  { "name": "terraform-resource", "value": "aws_kms_key.phi" },
+                  { "name": "terraform-resource", "value": "aws_s3_bucket_server_side_encryption_configuration.uploads" },
+                  { "name": "terraform-resource", "value": "aws_dynamodb_table.intake.server_side_encryption" },
+                  { "name": "conftest-policy", "value": "policies/sc28_s3_cmk.rego" },
+                  { "name": "conftest-policy", "value": "policies/sc28_ddb_cmk.rego" }
+                ],
+                "links": [
+                  {
+                    "rel": "evidence",
+                    "href": "s3://cgep-capstone-evidence-vault-65cc2469/evidence/evidence-3-20260617T234013Z-6d98ee09.tar.gz",
+                    "text": "Signed pipeline bundle (run #3, commit 6d98ee0). Verify with cosign verify-blob."
+                  }
+                ]
+              },
+              {
+                "uuid": "22222222-aaaa-4bbb-8ccc-222222222222",
+                "control-id": "sc-7",
+                "description": "GAP-05 closure. Lambda function deployed inside the customer VPC across two private subnets with no internet egress. AWS data plane access (S3 + DynamoDB) via free VPC gateway endpoints associated with the main route table. NAT Gateway deliberately omitted ($32/mo saved; no security benefit). Lambda security group permits HTTPS egress only, no ingress. Detective enforcement via cc66_lambda_vpc.rego. Lesson surfaced during Day 9: gateway endpoints don't auto-associate with the main route table; explicit route_table_ids required, otherwise endpoints exist but route nothing.",
+                "props": [
+                  { "name": "implementation-status", "value": "implemented" },
+                  { "name": "soc2-cc", "value": "CC6.6" },
+                  { "name": "gap-id", "value": "GAP-05" },
+                  { "name": "terraform-resource", "value": "aws_lambda_function.intake.vpc_config" },
+                  { "name": "terraform-resource", "value": "aws_security_group.lambda" },
+                  { "name": "terraform-resource", "value": "aws_vpc_endpoint.s3" },
+                  { "name": "terraform-resource", "value": "aws_vpc_endpoint.dynamodb" },
+                  { "name": "conftest-policy", "value": "policies/cc66_lambda_vpc.rego" }
+                ],
+                "links": [
+                  {
+                    "rel": "evidence",
+                    "href": "s3://cgep-capstone-evidence-vault-65cc2469/evidence/evidence-3-20260617T234013Z-6d98ee09.tar.gz",
+                    "text": "Signed pipeline bundle including Lambda vpc_config and gateway endpoint configuration in plan.json."
+                  }
+                ]
+              },
+              {
+                "uuid": "33333333-aaaa-4bbb-8ccc-333333333333",
+                "control-id": "sc-8",
+                "description": "GAP-03 closure. All three S3 buckets (uploads, evidence vault, CloudTrail logs) deny non-TLS access via explicit aws_s3_bucket_policy with Deny + aws:SecureTransport = false condition. Detective enforcement via sc7_tls_only.rego, which parses the bucket policy JSON and verifies the Deny statement is present. The Rego policy handles both inline jsonencode policies and data-source-driven policies (the latter accepted as valid intent when unresolved at plan time).",
+                "props": [
+                  { "name": "implementation-status", "value": "implemented" },
+                  { "name": "soc2-cc", "value": "CC6.7" },
+                  { "name": "gap-id", "value": "GAP-03" },
+                  { "name": "terraform-resource", "value": "aws_s3_bucket_policy.uploads_tls_only" },
+                  { "name": "terraform-resource", "value": "aws_s3_bucket_policy.vault" },
+                  { "name": "terraform-resource", "value": "aws_s3_bucket_policy.cloudtrail" },
+                  { "name": "conftest-policy", "value": "policies/sc7_tls_only.rego" }
+                ],
+                "links": [
+                  {
+                    "rel": "evidence",
+                    "href": "s3://cgep-capstone-evidence-vault-65cc2469/evidence/evidence-3-20260617T234013Z-6d98ee09.tar.gz",
+                    "text": "Signed pipeline bundle showing bucket policies in plan.json."
+                  }
+                ]
+              },
+              {
+                "uuid": "44444444-aaaa-4bbb-8ccc-444444444444",
+                "control-id": "ac-6",
+                "description": "GAP-07 closure. Lambda execution role's inline policy reduced from dynamodb:* and s3:* to specific actions (dynamodb:PutItem on the intake table, s3:PutObject on uploads/* prefix) matching what handler.py actually calls. Additionally, kms:Decrypt + kms:GenerateDataKey* on the PHI CMK (required because DynamoDB calls KMS as the caller). Detective enforcement via cc63_iam_least_priv.rego which rejects any service-wide wildcard (Action = '*' or 'service:*') on Allow statements while permitting action-prefix patterns (e.g., 's3:Get*') for legitimate breadth.",
+                "props": [
+                  { "name": "implementation-status", "value": "implemented" },
+                  { "name": "soc2-cc", "value": "CC6.3" },
+                  { "name": "gap-id", "value": "GAP-07" },
+                  { "name": "terraform-resource", "value": "aws_iam_role_policy.lambda_inline" },
+                  { "name": "conftest-policy", "value": "policies/cc63_iam_least_priv.rego" }
+                ],
+                "links": [
+                  {
+                    "rel": "evidence",
+                    "href": "s3://cgep-capstone-evidence-vault-65cc2469/evidence/evidence-3-20260617T234013Z-6d98ee09.tar.gz",
+                    "text": "Signed pipeline bundle showing the narrowed IAM policy in plan.json."
+                  }
+                ]
+              },
+              {
+                "uuid": "55555555-aaaa-4bbb-8ccc-555555555555",
+                "control-id": "cp-9",
+                "description": "GAP-04 closure. S3 uploads bucket has versioning enabled (aws_s3_bucket_versioning.uploads), allowing recovery from accidental or malicious overwrite of PHI submissions. Versioning also enables future Object Lock if PHI immutability becomes a requirement. Combined with GAP-01 (encrypted) and GAP-03 (TLS-only) and GAP-07 (tight IAM), the uploads bucket is recoverable-by-default for PHI ingestion. Terraform-only closure; no Rego policy because the pattern is repetitive and one example in the suite (the Object Lock + versioning on the evidence vault) makes the pattern.",
+                "props": [
+                  { "name": "implementation-status", "value": "implemented" },
+                  { "name": "soc2-cc", "value": "A1.2" },
+                  { "name": "gap-id", "value": "GAP-04" },
+                  { "name": "terraform-resource", "value": "aws_s3_bucket_versioning.uploads" }
+                ],
+                "links": [
+                  {
+                    "rel": "evidence",
+                    "href": "s3://cgep-capstone-evidence-vault-65cc2469/evidence/evidence-3-20260617T234013Z-6d98ee09.tar.gz",
+                    "text": "Signed pipeline bundle showing versioning configuration in plan.json."
+                  }
+                ]
+              },
+              {
+                "uuid": "66666666-aaaa-4bbb-8ccc-666666666666",
+                "control-id": "si-11",
+                "description": "GAP-06 closure. Lambda function has dead-letter queue (KMS-encrypted SQS), X-Ray Active tracing, and reserved concurrency intent (set to -1 unreserved-pool in sandbox account with 10-total budget; production would set to 10 leaving 990 unreserved). Failed async invocations land in the DLQ for 14 days; X-Ray traces every invocation for audit and debugging. The reserved_concurrent_executions decision documents the environment-dependent nature of the control: the GAP is closed when the control's INTENT is expressed (capacity reservation), not when a specific number is chosen.",
+                "props": [
+                  { "name": "implementation-status", "value": "implemented" },
+                  { "name": "soc2-cc", "value": "CC7.2" },
+                  { "name": "gap-id", "value": "GAP-06" },
+                  { "name": "terraform-resource", "value": "aws_lambda_function.intake.dead_letter_config" },
+                  { "name": "terraform-resource", "value": "aws_lambda_function.intake.tracing_config" },
+                  { "name": "terraform-resource", "value": "aws_sqs_queue.lambda_dlq" }
+                ],
+                "links": [
+                  {
+                    "rel": "evidence",
+                    "href": "s3://cgep-capstone-evidence-vault-65cc2469/evidence/evidence-3-20260617T234013Z-6d98ee09.tar.gz",
+                    "text": "Signed pipeline bundle showing DLQ, X-Ray, and concurrency configuration."
+                  }
+                ]
+              },
+              {
+                "uuid": "77777777-aaaa-4bbb-8ccc-777777777777",
+                "control-id": "au-2",
+                "description": "GAP-08 closure (partial). API Gateway HTTP API stage has access logging enabled to a KMS-encrypted CloudWatch log group (30-day retention), with JSON-formatted log records capturing requestId, sourceIp, userAgent, method, path, status, latency, and integration errors. Stage also has throttling (100 req/s rate, 50 req/s burst) for capacity control. WAF deliberately deferred as documented future work. Terraform-only closure.",
+                "props": [
+                  { "name": "implementation-status", "value": "implemented" },
+                  { "name": "soc2-cc", "value": "CC7.2" },
+                  { "name": "gap-id", "value": "GAP-08" },
+                  { "name": "terraform-resource", "value": "aws_apigatewayv2_stage.default.access_log_settings" },
+                  { "name": "terraform-resource", "value": "aws_apigatewayv2_stage.default.default_route_settings" },
+                  { "name": "terraform-resource", "value": "aws_cloudwatch_log_group.api_access" }
+                ],
+                "links": [
+                  {
+                    "rel": "evidence",
+                    "href": "s3://cgep-capstone-evidence-vault-65cc2469/evidence/evidence-3-20260617T234013Z-6d98ee09.tar.gz",
+                    "text": "Signed pipeline bundle showing API Gateway logging and throttling configuration."
+                  }
+                ]
+              },
+              {
+                "uuid": "88888888-aaaa-4bbb-8ccc-888888888888",
+                "control-id": "au-11",
+                "description": "Account-level audit log retention. Multi-region CloudTrail with log file validation enabled (auditor can detect tampering with the trail itself via AWS-published hourly signed digest files). Trail writes to a dedicated S3 bucket with SSE-KMS via the PHI CMK, public access blocked, versioning enabled, lifecycle deletion at 30 days (production would extend to 365+). Bucket policy scoped via aws:SourceArn to prevent confused-deputy attacks from other accounts' CloudTrails writing here.",
+                "props": [
+                  { "name": "implementation-status", "value": "implemented" },
+                  { "name": "soc2-cc", "value": "CC4.1" },
+                  { "name": "terraform-resource", "value": "aws_cloudtrail.main" },
+                  { "name": "terraform-resource", "value": "aws_s3_bucket.cloudtrail" },
+                  { "name": "terraform-resource", "value": "aws_s3_bucket_lifecycle_configuration.cloudtrail" }
+                ],
+                "links": [
+                  {
+                    "rel": "evidence",
+                    "href": "s3://cgep-capstone-evidence-vault-65cc2469/evidence/evidence-3-20260617T234013Z-6d98ee09.tar.gz",
+                    "text": "Signed pipeline bundle showing CloudTrail configuration."
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "back-matter": {
+      "resources": [
+        {
+          "uuid": "aaaaaaaa-1111-4222-8333-444444444444",
+          "title": "Capstone repository",
+          "rlinks": [
+            { "href": "https://github.com/AE-Digital5/cgep-app-starter" }
+          ]
+        },
+        {
+          "uuid": "bbbbbbbb-1111-4222-8333-444444444444",
+          "title": "GAPS.md — the 8 named non-compliance gaps in the starter",
+          "rlinks": [
+            { "href": "https://github.com/AE-Digital5/cgep-app-starter/blob/main/GAPS.md" }
+          ]
+        },
+        {
+          "uuid": "cccccccc-1111-4222-8333-444444444444",
+          "title": "Design document — framework choice, decisions, and rationale",
+          "rlinks": [
+            { "href": "https://github.com/AE-Digital5/cgep-app-starter/blob/main/docs/design.md" }
+          ]
+        },
+        {
+          "uuid": "dddddddd-1111-4222-8333-444444444444",
+          "title": "WRITEUP — engineering reflection and verification recipe",
+          "rlinks": [
+            { "href": "https://github.com/AE-Digital5/cgep-app-starter/blob/main/WRITEUP.md" }
+          ]
+        }
+      ]
+    }
+  }
+}
