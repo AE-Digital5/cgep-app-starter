@@ -205,3 +205,5 @@ Scope was bounded so the work could finish in 30 days. Things explicitly out:
 - **Disaster recovery / cross-region replication**. The evidence vault is single-region. Production would replicate evidence to a second region with cross-region replication.
 
 Future capstone work would prioritize remote state, multi-region, and HIPAA overlay in that order.
+
+**Note on long-term decryption**: when the workload was destroyed after capstone wrap, the CMK that originally encrypted the evidence vault was scheduled for deletion. AWS treats KMS keys in PendingDeletion as unusable, breaking decryption of any CMK-encrypted object. To allow long-term reviewer access independent of the CMK lifecycle, the three evidence files were re-encrypted in place with bucket-managed AES256 and given a 1-year Object Lock retention. The bundle content is unchanged, so the SHA-256 digest and the Cosign signature both still verify. This is a design lesson: chain-of-custody artifacts intended to outlive the original infrastructure should not depend on resources scheduled for deletion alongside the workload.
