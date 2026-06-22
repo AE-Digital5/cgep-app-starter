@@ -13,7 +13,7 @@ A working, evidence-producing GRC pipeline, not just a hardened workload. Four l
 - **GitHub Actions CI pipeline** (`grc-gate.yml`) that runs plan → policy gate → apply → sign with Cosign keyless → upload to evidence vault. The vault is S3 with Object Lock GOVERNANCE and a bucket policy denying deletion to anyone but root.
 - **OSCAL component-definition** mapping every gap closure to a NIST 800-53 Rev 5 control with the SOC 2 Trust Services Criterion ID as a prop. Validates clean with trestle v4.0.3.
 
-The signed evidence bundle in `s3://cgep-capstone-evidence-vault-65cc2469/evidence/` is the deliverable. Cosign verifies the bundle came from this workflow file at this commit; `sha256sum -c` verifies the bundle hasn't been altered; the bundle contents prove the policies passed and the apply succeeded. Verification details are at the end of this document.
+The signed evidence bundle in `s3://cgep-capstone-evidence-vault-65cc2469/evidence/` is the auditor's artifact. Cosign verifies the bundle came from this workflow file at this commit; `sha256sum -c` verifies the bundle hasn't been altered; the bundle contents prove the policies passed and the apply succeeded. Verification details are at the end of this document.
 
 ## Why SOC 2 (and not HIPAA or CMMC)
 
@@ -202,6 +202,6 @@ Scope was bounded so the work could finish in 30 days. Things explicitly out:
 - **PHI redaction or tokenization** of submission fields. Raw PHI hits DynamoDB; production would tokenize identifiers and consider field-level encryption.
 - **Multi-account architecture** (organization with separated dev/staging/prod, centralized logging account, isolated PHI account). The capstone is a single sandbox account.
 - **Quarterly Conftest policy review and updates**. The 5 policies cover the 5 most-critical gaps; a real compliance program would expand to ~30 policies and rotate them as services and gaps evolve.
-- **Disaster recovery / cross-region replication**. The vault and evidence buckets are single-region. Production would replicate evidence to a second region with cross-region replication.
+- **Disaster recovery / cross-region replication**. The evidence vault is single-region. Production would replicate evidence to a second region with cross-region replication.
 
 Future capstone work would prioritize remote state, multi-region, and HIPAA overlay in that order.

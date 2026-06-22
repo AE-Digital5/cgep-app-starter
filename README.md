@@ -1,80 +1,167 @@
-# cgep-app-starter
+# Acme Health Patient Intake API — CGE-P GRC Capstone
 
-> Patient Intake API for "Acme Health". The deliberately-flawed workload your **CGE-P capstone** wraps with GRC controls.
+> A 30-day GRC engineering capstone targeting **SOC 2 Type II**. This fork takes the deliberately non-compliant `cgep-app-starter` and closes all 8 named compliance gaps with hardened Terraform, detective Rego policy gates, a signed-evidence CI pipeline, and an OSCAL component-definition mapping every closure to a NIST 800-53 Rev 5 control.
+
+**Submission artifact**: the signed evidence bundle at `s3://cgep-capstone-evidence-vault-65cc2469/evidence/evidence-3-20260617T234013Z-6d98ee09.tar.gz`. Reproducible verification is the last section below.
+
+---
 
 ## What this is
 
-A minimal AWS workload: VPC, Lambda, API Gateway, DynamoDB, S3. It ingests patient intake submissions over HTTPS. Think of it as a system you have just inherited from an engineering team and been asked to make audit-defensible.
+The upstream `cgep-app-starter` ships a minimal AWS workload (VPC, Lambda, API Gateway, DynamoDB, S3) for handling patient intake submissions. It is **non-compliant by design** — the starter's `GAPS.md` enumerates 8 specific holes a real auditor would call out.
 
-This repository ships **non-compliant on purpose**. Your job in the capstone is not to rewrite this app. Your job is to wrap it with the four CGE-P layers (Terraform GRC baseline, Rego policies, GitHub Actions evidence pipeline, OSCAL component) so the same workload becomes audit-defensible against HIPAA, SOC 2, and CMMC L2.
+This fork closes all 8 gaps and adds the GRC infrastructure around the workload: detective enforcement, automated evidence collection, and machine-readable assurance.
 
-## The deploy gate
+---
 
-If you cannot deploy this starter, you cannot pass the capstone. Real GRC engineers inherit working systems. Step zero is making the system run.
+## The four layers
+
+### 1. Hardened workload Terraform (`terraform/`)
+
+Closes all 8 named gaps from `GAPS.md`:
+
+- KMS CMK (`alias/acme-health-phi`) with separated admin (CI role) and use (Lambda role) permissions
+- SSE-KMS on uploads, evidence vault, and CloudTrail buckets
+- DynamoDB SSE-KMS using the same CMK
+- TLS-only bucket policies on all three buckets
+- Lambda in private VPC subnets with S3 + DynamoDB gateway VPC endpoints
+- Lambda DLQ (KMS-encrypted SQS) + X-Ray Active tracing + reserved concurrency intent
+- Lambda IAM scoped to `dynamodb:PutItem` and `s3:PutObject` on the `uploads/*` prefix only
+- API Gateway access logging (KMS-encrypted CloudWatch) + throttling (100/50 rps)
+- Multi-region CloudTrail with log file validation
+
+Detail: see `docs/design.md` for the architectural rationale.
+
+### 2. Rego policy gate (`policies/`)
+
+Five OPA Rego policies enforcing the most critical 5 gaps detectively:
+
+| Policy | Gap | SOC 2 | NIST |
+|--------|-----|-------|------|
+| `sc28_s3_cmk.rego` | GAP-01 | CC6.1 | SC-28 |
+| `sc28_ddb_cmk.rego` | GAP-02 | CC6.1 | SC-28 |
+| `sc7_tls_only.rego` | GAP-03 | CC6.7 | SC-7, SC-8 |
+| `cc66_lambda_vpc.rego` | GAP-05 | CC6.6 | SC-7 |
+| `cc63_iam_least_priv.rego` | GAP-07 | CC6.3 | AC-6 |
+
+Unit tests in `policies/tests/`. All 21 tests pass. Conftest runs the policies against `plan.json` in the CI gate.
 
 ```bash
-git clone https://github.com/GRCEngClub/cgep-app-starter
-cd cgep-app-starter
-
-# Confirm you're authenticated to the right account:
-make creds AWS_PROFILE=<your-sandbox-profile>
-
-make deploy AWS_PROFILE=<your-sandbox-profile>
-make test    AWS_PROFILE=<your-sandbox-profile>
+opa test policies/ -v
+# PASS: 21/21
 ```
 
-> **AWS SSO note:** if your profile is SSO-based, Terraform's AWS provider can fail to read it directly with `failed to find SSO session section`. The Makefile's `eval $(aws configure export-credentials)` pattern handles this. If you're running `terraform` commands by hand, do the same export first.
+### 3. GitHub Actions CI pipeline (`.github/workflows/grc-gate.yml`)
 
-Expected output of `make test`:
+Plan → policy gate → apply → sign-with-Cosign-keyless → upload-to-evidence-vault.
 
-```json
-{
-    "submission_id": "f1e3...",
-    "status": "received"
-}
+- Trigger: PRs touching `terraform/`, `policies/`, `oidc/`, or the workflow itself; plus pushes to `main`
+- OIDC auth to AWS via the `cgep-capstone-gate` role (defined in `oidc/`)
+- Conftest fails the PR if any of the 5 Rego policies deny against the real plan
+- Cosign keyless signs the bundle; signature published to Sigstore Rekor for transparency
+- Vault is S3 with Object Lock GOVERNANCE retention + a `DenyBucketDeletion` policy
+
+### 4. OSCAL component-definition (`component-definitions/compliant-intake-api/`)
+
+Machine-readable assurance document mapping every gap closure to a NIST 800-53 Rev 5 control with the SOC 2 Trust Services Criterion ID as a `soc2-cc` prop. Validates clean with trestle v4.0.3.
+
+```bash
+trestle validate -f component-definitions/compliant-intake-api/component-definition.json
+trestle validate -f profiles/soc2-cc-minimum/profile.json
 ```
 
-When you're done exploring: `make destroy`.
+---
 
-## What you build on top
+## Repository layout
+├── terraform/                    workload IaC (closes all 8 gaps)
 
-Fork the repo into your own `cgep-capstone` and add:
+│   ├── main.tf                   VPC, Lambda, API Gateway, DDB
 
-1. **Layer 1 — GRC baseline (Terraform).** KMS keys, an S3 evidence vault with Object Lock, a CloudTrail trail. Bring this starter's data stores under your CMK.
-2. **Layer 2 — OPA policy suite (Rego).** Five or more policies that catch the named gaps in [GAPS.md](GAPS.md). Each policy maps to at least one control from the framework you choose.
-3. **Layer 3 — GitHub Actions pipeline.** Plan → Conftest gate → apply → Cosign sign → upload to vault.
-4. **Layer 4 — OSCAL component.** A `component-definition.json` describing how your governed system implements its controls.
+│   ├── kms.tf                    PHI CMK + key policy
 
-Full brief: `docs/labs/07_01_capstone_brief.md` in the course content repo.
+│   ├── hardening.tf              SSE, TLS, versioning, IAM
 
-## Framework mapping is required
+│   ├── cloudtrail.tf             multi-region trail
 
-Your capstone must declare a primary framework: **HIPAA Security Rule**, **SOC 2 Trust Services Criteria**, or **CMMC Level 2**. Every policy carries at least one control ID from your chosen framework. Your OSCAL component's `control-implementations` reference your framework's catalog.
+│   ├── evidence-vault.tf         Object Lock S3 vault
 
-A starter mapping is in [FRAMEWORKS.md](FRAMEWORKS.md). It is not the only valid mapping. You're expected to defend yours.
+│   └── lambda/handler.py         intake handler
 
-## Cost
+├── policies/                     5 Rego policies + 21 unit tests
 
-Roughly $0 if destroyed within an hour. Lambda + API Gateway + DynamoDB + S3 are all pay-per-use, and an empty deployment generates no traffic. CloudTrail (which you add) costs cents.
+├── oidc/                         GitHub OIDC role for CI (separate state)
 
-## Layout
+├── .github/workflows/grc-gate.yml the full CI pipeline
 
+├── component-definitions/         OSCAL component-definition.json
+
+│   └── compliant-intake-api/component-definition.json
+
+├── profiles/                      OSCAL profile selecting the 8 controls
+
+│   └── soc2-cc-minimum/profile.json
+
+├── docs/
+
+│   ├── design.md                 decisions, rationale, architecture
+
+│   └── deploy-gate-receipt.md    Day 1 deploy-gate proof
+
+├── GAPS.md                       the 8 named gaps (from starter, kept verbatim)
+
+├── WRITEUP.md                    the engineering reflection (read this)
+
+└── README.md                     this file
+
+## Read order for graders
+
+1. **`WRITEUP.md`** — the substantive document. Framework choice, gap closures, design decisions, lessons from Day 6 and Day 9, future production work, verification recipe.
+2. **`docs/design.md`** — earlier architectural decision record.
+3. **`GAPS.md`** — the original 8 gaps the starter ships with.
+4. **`component-definitions/compliant-intake-api/component-definition.json`** — OSCAL implementation document.
+
+## Verifying the signed evidence bundle
+
+The bundle is the auditor's artifact. Verify it locally:
+
+```bash
+# Download the bundle and its sidecars
+aws s3 cp s3://cgep-capstone-evidence-vault-65cc2469/evidence/evidence-3-20260617T234013Z-6d98ee09.tar.gz .
+aws s3 cp s3://cgep-capstone-evidence-vault-65cc2469/evidence/evidence-3-20260617T234013Z-6d98ee09.tar.gz.sha256 .
+aws s3 cp s3://cgep-capstone-evidence-vault-65cc2469/evidence/evidence-3-20260617T234013Z-6d98ee09.tar.gz.sig.bundle .
+
+# Verify the bundle hasn't been altered
+sha256sum -c evidence-3-20260617T234013Z-6d98ee09.tar.gz.sha256
+# Expected: OK
+
+# Verify the Cosign signature came from this workflow at this commit
+cosign verify-blob \
+  --bundle evidence-3-20260617T234013Z-6d98ee09.tar.gz.sig.bundle \
+  --certificate-identity "https://github.com/AE-Digital5/cgep-app-starter/.github/workflows/grc-gate.yml@refs/heads/main" \
+  --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+  evidence-3-20260617T234013Z-6d98ee09.tar.gz
+# Expected: Verified OK
 ```
-cgep-app-starter/
-├── README.md            # this file
-├── WORKLOAD.md          # what the API does
-├── GAPS.md              # the named flaws your policies must catch
-├── FRAMEWORKS.md        # HIPAA / SOC 2 / CMMC mapping primer
-├── Makefile             # make deploy | test | destroy
-├── terraform/
-│   ├── main.tf
-│   ├── variables.tf
-│   ├── outputs.tf
-│   └── lambda/handler.py
-└── test/
-    └── intake.sh
-```
 
-## License
+Bundle contents: `plan.json`, `policy-results.json` (12 successes), `apply.log`, `manifest.json`. The manifest binds the deployment to commit `6d98ee0954934a518ff3493d79f8648c64363146`, run #3, and the CI role ARN.
 
-MIT. Fork freely. Submissions remain learners' own work.
+## Running the pipeline in your own account
+
+The pipeline is built to be portable. To run it in a fresh AWS account, you'd:
+
+1. Fork this repo
+2. Apply `oidc/` once locally to create the GitHub OIDC role
+3. Set `vars.AWS_ROLE_ARN` in your fork's GitHub Settings → Variables to the new role's ARN
+4. Push any change to `terraform/`
+
+**Cost note**: a full pipeline run creates ~45 AWS resources including a KMS CMK (~$1/mo), multi-region CloudTrail, a Lambda + ENIs, a VPC with gateway endpoints, an API Gateway HTTP API, a DynamoDB on-demand table, S3 buckets, an SQS queue, and CloudWatch log groups. Idle cost is approximately $0.50-1.00/day. Destroying via `terraform destroy` returns cost to near zero except the KMS key which goes into 7-day pending deletion.
+
+## Status
+
+The deliverable is the signed evidence bundle in the vault, produced by CI run #3 from commit `6d98ee0` on Tue Jun 17 2026. The workload was destroyed after capstone wrap to control sandbox cost; the vault and bundle remain.
+
+Capstone window: Jun 8 → Jun 30 2026.
+
+---
+
+Forked from [GRCEngClub/cgep-app-starter](https://github.com/GRCEngClub/cgep-app-starter). Capstone work by AE-Digital5.
